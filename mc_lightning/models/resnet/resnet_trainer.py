@@ -8,10 +8,20 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers.tensorboard import TensorBoardLogger
 from torch.utils.data import random_split, DataLoader
 
+sys.path.append('./')
+
 from mc_lightning.utilities.utilities import tile_sampler, subsample_tiles
 from mc_lightning.models.resnet.resnet_module import PretrainedResnet50FT
 from mc_lightning.models.resnet.resnet_transforms import RGBTrainTransform, RGBEvalTransform
 from mc_lightning.models.resnet.resnet_dataset import SlideDataset
+
+import wandb
+
+
+# python3 /home/karthiknair/mc_lightning_public/mc_lightning/models/resnet/resnet_trainer.py -o /mnt/disks/disk_use/blca/ml_results/models --seed 182 -df /mnt/disks/disk_use/blca/path_dataframes/ff_stain_norm_mag_20_pix_512.csv \
+# --folds 5 --fold_index 0 --train_ids /mnt/disks/disk_use/blca/ml_results/train_val_test_splits/TvN \
+# --dev_ids /mnt/disks/disk_use/blca/ml_results/train_val_test_splits/TvN --label_var is_tumor \
+# --slide_var slide_id --batch_size 128 --num_workers 10 --prefix '_'
 
 def cli_main():
     parser = ArgumentParser()
@@ -26,8 +36,7 @@ def cli_main():
     parser.add_argument('--folds', type=int, default=4)
     parser.add_argument('--fold_index', type=int, default=0)
 
-    parser.add_argument('--train_ids', type=str, help='file path of list of IDs in train set')
-    parser.add_argument('--dev_ids', type=str, help='file path of list of IDs in validation (dev) set')
+    parser.add_argument('--split_ids', type = str, help = 'file path of directory with train, validation, and test set ID\'s')
 
     parser.add_argument('--label_var', type=str)
     parser.add_argument('--slide_var', type=str)
@@ -47,10 +56,17 @@ def cli_main():
     parser = PretrainedResnet50FT.add_model_specific_args(parser)
 
     args = parser.parse_args()
+    if args.deterministic:
+        print(f'Seeding everything with seed {args.seed}')
+        pl.seed_everything(args.seed)
 
     # https://pytorch-lightning.readthedocs.io/en/latest/trainer.html?highlight=seed_everything#reproducibility
     # use seed_everything and Trainer(deterministic=True) to fix across numpy, torch, python.random and PYTHONHASHSEED.
     # pl.seed_everything(args.seed)
+
+    # initialize wandb to sync with tensorboard
+    os.environ['WANDB_DIR'] = args.out_dir
+    wandb.init(sync_tensorboard=True)
 
     try:
         paths_df = pd.read_pickle(args.paths_df)
@@ -60,14 +76,14 @@ def cli_main():
     fold_idx = args.fold_index
     print(f'====== Only Running on Fold {fold_idx} ======')
     # PULLING FROM model-comparison train_folds.py
-    temp_path = os.path.join(args.out_dir, args.prefix + f'fold{fold_idx}_train_slide_ids.csv')
+    temp_path = os.path.join(args.split_ids, args.prefix + f'fold{fold_idx}_train_slide_ids.csv')
     train_ids = pd.read_csv(temp_path).iloc[:, 1].values
 
-    temp_path = os.path.join(args.out_dir, args.prefix + f'fold{fold_idx}_val_slide_ids.csv')
+    temp_path = os.path.join(args.split_ids, args.prefix + f'fold{fold_idx}_val_slide_ids.csv')
     val_ids = pd.read_csv(temp_path).iloc[:, 1].values
 
     try:
-        temp_path = os.path.join(args.out_dir, args.prefix + f'test_slide_ids.csv')
+        temp_path = os.path.join(args.split_ids, args.prefix + f'test_slide_ids.csv')
         test_ids = pd.read_csv(temp_path).iloc[:, 1].values
     except:
         print('Could not load test set IDs -- if this is expected, ignore')
@@ -100,7 +116,7 @@ def cli_main():
                                                        
     # create trainer
     #trainer = pl.Trainer.from_argparse_args(args, logger=tb_logger, checkpoint_callback=checkpoint_callback)
-    trainer = pl.Trainer.from_argparse_args(args)
+    trainer = pl.Trainer.from_argparse_args(args, default_root_dir = args.out_dir)
 
     # fit model
     trainer.fit(model, train_dataloader=train_dataloader, val_dataloaders=val_dataloader)

@@ -34,7 +34,7 @@ def create_cv_splits_id_only(path_df, num_folds=5, test_split=True, seed=None):
         np.random.seed(seed)
 
     sample_ids = path_df.index.unique().values
-    splitter = KFold(n_splits=num_folds, shuffle=True)
+    splitter = KFold(n_splits=num_folds, shuffle=True, random_state = seed)
     splitter.get_n_splits(sample_ids)
     splits = [x for x in splitter.split(sample_ids)]
 
@@ -43,7 +43,7 @@ def create_cv_splits_id_only(path_df, num_folds=5, test_split=True, seed=None):
     if test_split:
         for (train_idx, eval_idx) in splits:
             # split smaller eval. fold to provide dev and testing sets
-            dev_idx, test_idx = train_test_split(eval_idx, test_size=0.5)
+            dev_idx, test_idx = train_test_split(eval_idx, test_size=0.5, random_state = seed)
 
             # store dataframes for current fold
             split_id_agg.append(
@@ -147,12 +147,12 @@ def make_multitask_folds(paths_df_file, out_dir, task0_labels, task1_labels,
 
     print(all_ids_subset.shape)
     sample_ids = paths_subset_df.index.unique().values
-    train_dev_ids, test_ids = train_test_split(sample_ids, test_size=test_size, shuffle=True)
+    train_dev_ids, test_ids = train_test_split(sample_ids, test_size=test_size, shuffle=True, random_state = seed)
     train_dev_df = paths_subset_df.loc[train_dev_ids]
     # updated splitting scheme
     train_dev_splits = [
         create_cv_splits_id_only(train_dev_df.loc[train_dev_df['meta_label'] == label], num_folds=folds,
-                                 seed=seed) for label in range(4)
+                                 seed=seed, test_split=False) for label in range(4)
     ]
 
     for split_idx, fold in enumerate(zip(*train_dev_splits)):
@@ -176,16 +176,20 @@ def make_folds(paths_df_file, out_dir, label_name,
 
     if seed is not None:
         print('Using seed for make_folds call')
-        np.random.seed(seed)
+        np.random.seed(seed) # does this affect sklearn
 
+    
     # manual hardcoding
     try:
         paths_df = pd.read_pickle(paths_df_file)
     except:
         paths_df = pd.read_csv(paths_df_file)
-
+    
+    paths_df = paths_df.dropna(axis = 0, how = 'all', subset = [label_name]) # remove NA's ..
+    print(f'After removing NA labels, {paths_df.shape[0]} slides remain') # print ratio of rows removed
     paths_df.index.name = 'idx'
     data_anno = paths_df.reset_index().drop_duplicates('idx')
+    print(data_anno.index)
     min_group_slides = data_anno.groupby([label_name]).full_path.count().min()
     print('Min. number of slides: ', min_group_slides)
     print(f'Balancing based on {label_name}')
@@ -195,7 +199,7 @@ def make_folds(paths_df_file, out_dir, label_name,
 
     print(f'IDs remaining after balancing: {len(all_ids_subset)}')
     sample_ids = paths_subset_df.index.unique().values
-    train_dev_ids, test_ids = train_test_split(sample_ids, test_size=test_size, shuffle=True)
+    train_dev_ids, test_ids = train_test_split(sample_ids, test_size=test_size, shuffle=True, random_state = seed)
     train_dev_df = paths_subset_df.loc[train_dev_ids]
     train_dev_splits = [
         create_cv_splits_id_only(train_dev_df.loc[train_dev_df[label_name] == label], num_folds=folds, seed=seed) for

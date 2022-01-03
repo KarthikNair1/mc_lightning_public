@@ -11,6 +11,7 @@ import wandb
 import math
 from torchmetrics import SpearmanCorrcoef
 import torchmetrics
+import torchvision
 
 class _ECELoss(nn.Module):
     """
@@ -113,6 +114,14 @@ class PretrainedResnet50FT(pl.LightningModule):
     def training_step(self, batch, batch_nb):
         # REQUIRED
         loss = self.step('train', batch, batch_nb)
+
+        if batch_nb == 0:
+            imgs = batch[0]
+            grid_of_imgs = torchvision.utils.make_grid(imgs, nrow = 4)
+            tensorboard = self.logger.experiment
+            tensorboard.add_image("example_imgs", grid_of_imgs)
+
+
         return loss
 
     def validation_step(self, batch, batch_nb):

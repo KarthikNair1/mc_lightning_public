@@ -82,8 +82,8 @@ class RGBTrainTransform(object):
                                               transforms.RandomHorizontalFlip(),
                                             #   color_jitter,
                                               transforms.ToTensor(),
-                                              Expander(),
-                                              normalizer])
+                                              Expander()])
+                                            #  normalizer]) # ok to omit b/c stain normalization performed
         self.train_transform = data_transforms
 
     def __call__(self, sample):
