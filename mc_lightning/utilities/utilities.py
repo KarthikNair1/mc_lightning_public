@@ -202,7 +202,7 @@ def make_folds(paths_df_file, out_dir, label_name,
     train_dev_ids, test_ids = train_test_split(sample_ids, test_size=test_size, shuffle=True, random_state = seed)
     train_dev_df = paths_subset_df.loc[train_dev_ids]
     train_dev_splits = [
-        create_cv_splits_id_only(train_dev_df.loc[train_dev_df[label_name] == label], num_folds=folds, seed=seed, 
+        create_cv_splits_id_only(train_dev_df.loc[train_dev_df[label_name] == label], num_folds=folds, 
             seed=seed, test_split=False) for label in range(4)
     ]
 
