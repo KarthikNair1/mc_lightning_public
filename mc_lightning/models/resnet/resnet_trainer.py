@@ -6,10 +6,10 @@ from argparse import ArgumentParser
 import os
 import pytorch_lightning as pl
 from pytorch_lightning.loggers.tensorboard import TensorBoardLogger
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from torch.utils.data import random_split, DataLoader
 
 sys.path.append('./')
-
 from mc_lightning.utilities.utilities import tile_sampler, subsample_tiles
 from mc_lightning.models.resnet.resnet_module import PretrainedResnet50FT
 from mc_lightning.models.resnet.resnet_transforms import RGBTrainTransform, RGBEvalTransform
@@ -57,7 +57,6 @@ def cli_main():
 
     args = parser.parse_args()
     if args.deterministic:
-        print(f'Seeding everything with seed {args.seed}')
         pl.seed_everything(args.seed)
 
     # https://pytorch-lightning.readthedocs.io/en/latest/trainer.html?highlight=seed_everything#reproducibility
@@ -108,7 +107,7 @@ def cli_main():
 
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                                   pin_memory=True, num_workers=args.num_workers)
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=True,
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
                                 pin_memory=True, num_workers=args.num_workers)
 
     # create model
@@ -116,7 +115,8 @@ def cli_main():
                                                        
     # create trainer
     #trainer = pl.Trainer.from_argparse_args(args, logger=tb_logger, checkpoint_callback=checkpoint_callback)
-    trainer = pl.Trainer.from_argparse_args(args, default_root_dir = args.out_dir)
+    early_stop_callback = EarlyStopping(monitor = 'val_loss', min_delta = 0.0, patience = 3, verbose = False, mode = 'min')
+    trainer = pl.Trainer.from_argparse_args(args, default_root_dir = args.out_dir, callbacks = [])
 
     # fit model
     trainer.fit(model, train_dataloader=train_dataloader, val_dataloaders=val_dataloader)
@@ -129,10 +129,11 @@ def cli_main():
             paths=test_paths.full_path.values,
             slide_ids=test_paths.index.values,
             labels=test_paths[args.label_var].values,
-            transform_compose=RGBEvalTransform(args.tile_size, args.crop_size)
+            transform_compose=RGBEvalTransform(args.tile_size, args.crop_size),
+            transform_compose_ori=RGBEvalTransform(args.tile_size, args.crop_size, add_norm=False)
         )
         test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, pin_memory=True,
-                                     num_workers=args.num_workers)
+                                     num_workers=args.num_workers, shuffle = True)
         trainer.test(model, test_dataloaders=test_dataloader)
 
 

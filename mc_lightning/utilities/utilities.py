@@ -184,9 +184,9 @@ def make_folds(paths_df_file, out_dir, label_name,
         paths_df = pd.read_pickle(paths_df_file)
     except:
         paths_df = pd.read_csv(paths_df_file)
-    
+    olddim = paths_df.shape[0]
     paths_df = paths_df.dropna(axis = 0, how = 'all', subset = [label_name]) # remove NA's ..
-    print(f'After removing NA labels, {paths_df.shape[0]} slides remain') # print ratio of rows removed
+    print(f'{olddim - paths_df.shape[0]}/{olddim} slides removed because of NA labels') # print ratio of rows removed
     paths_df.index.name = 'idx'
     data_anno = paths_df.reset_index().drop_duplicates('idx')
     print(data_anno.index)
@@ -203,9 +203,9 @@ def make_folds(paths_df_file, out_dir, label_name,
     train_dev_df = paths_subset_df.loc[train_dev_ids]
     train_dev_splits = [
         create_cv_splits_id_only(train_dev_df.loc[train_dev_df[label_name] == label], num_folds=folds, seed=seed, \
-        test_split=False) for label in range(4)
+        test_split=False) for label in range(num_classes)
     ]
-
+    
     id_agg = {}
     id_agg['test_ids'] = test_ids
     id_agg['train_ids'] = {}
@@ -228,13 +228,6 @@ def make_folds(paths_df_file, out_dir, label_name,
         id_agg['val_ids'][split_idx] = val_ids
 
     return id_agg
-
-
-
-
-
-
-
 
 def get_checkpoint_and_data(output_dir, paths_file, fold_idx, model_idx, epoch=9):
     paths_df = pd.read_pickle(paths_file)
@@ -498,4 +491,15 @@ def subsample_tiles(data_df, ids, tiles_per_slide, label_var, slide_var='slide_i
     subset_df = subset_df.reset_index().groupby(slide_var).apply(lambda x: tile_sampler(x, tiles_per_slide))
     subset_df = subset_df.reset_index(drop=True).dropna(subset=[label_var])
 
+    subset_df = subset_df.set_index(slide_var, drop = False)
+
     return subset_df
+
+def fig2img(fig):
+    """Convert a Matplotlib figure to a PIL Image and return it"""
+    import io
+    buf = io.BytesIO()
+    fig.savefig(buf)
+    buf.seek(0)
+    img = Image.open(buf)
+    return img

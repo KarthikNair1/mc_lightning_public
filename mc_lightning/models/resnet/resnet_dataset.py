@@ -5,6 +5,9 @@ from torch.utils.data import random_split, DataLoader
 from torchvision import transforms
 from tqdm import tqdm 
 from PIL import Image
+
+import sys
+sys.path.append('./')
 from mc_lightning.utilities.utilities import pil_loader
 
 from PIL import ImageFile
@@ -22,7 +25,7 @@ class SlideDataset(data.Dataset):
     Modification of vanilla `tmb_bot.utilities.Dataset` class to facilitate having
     a label for classification as well as the slide name itself
     """
-    def __init__(self, paths, slide_ids, labels, transform_compose, bw = 'None'):
+    def __init__(self, paths, slide_ids, labels, transform_compose, transform_compose_ori = None, bw = 'None'):
         """
         Paths and labels should be array like
         """
@@ -30,6 +33,7 @@ class SlideDataset(data.Dataset):
         self.slide_ids = slide_ids
         self.labels = labels
         self.transform = transform_compose
+        self.transform_ori = transform_compose_ori # this will be same as transform, but without the normalization step
         self.bw = bw
 
     def __len__(self):
@@ -41,11 +45,19 @@ class SlideDataset(data.Dataset):
 
         img_path = self.paths[index]
         pil_file = pil_loader(img_path, self.bw)
+
+        ori = pil_file.copy()
+        
         pil_file = self.transform(pil_file)
         slide_id = self.slide_ids[index]
         label = self.labels[index]
 
-        return pil_file, label, slide_id
+        if self.transform_ori is not None: # we need to also return original image after transforming with transform_ori
+            ori = self.transform_ori(ori)
+            return pil_file, label, slide_id, ori
+
+        else:
+            return pil_file, label, slide_id
 
 class ContrastiveSlideDataset(data.Dataset):
     """

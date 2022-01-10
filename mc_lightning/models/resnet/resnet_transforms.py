@@ -82,8 +82,8 @@ class RGBTrainTransform(object):
                                               transforms.RandomHorizontalFlip(),
                                             #   color_jitter,
                                               transforms.ToTensor(),
-                                              Expander()])
-                                            #  normalizer]) # ok to omit b/c stain normalization performed
+                                              Expander(),
+                                              normalizer])
         self.train_transform = data_transforms
 
     def __call__(self, sample):
@@ -93,17 +93,22 @@ class RGBTrainTransform(object):
 
 
 class RGBEvalTransform(object):
-    def __init__(self, full_size, crop_size, norm_mean=[0.485, 0.456, 0.406], norm_std=[0.229, 0.224, 0.225]):
+    def __init__(self, full_size, crop_size, norm_mean=[0.485, 0.456, 0.406], norm_std=[0.229, 0.224, 0.225], add_norm = True):
         self.full_size = full_size      
         self.crop_size = crop_size
         self.norm_mean = norm_mean
         self.norm_std = norm_std
         normalizer = transforms.Normalize(mean=self.norm_mean, std=self.norm_std)
-        data_transforms = transforms.Compose([transforms.Resize(self.full_size),
+
+        list_transforms = [transforms.Resize(self.full_size),
                                               transforms.CenterCrop(self.crop_size),
                                               transforms.ToTensor(),
-                                              Expander(),
-                                              normalizer])
+                                              Expander()]
+
+        if add_norm:
+            list_transforms.append(normalizer)
+
+        data_transforms = transforms.Compose(list_transforms)
         self.eval_transform = data_transforms
 
     def __call__(self, sample):

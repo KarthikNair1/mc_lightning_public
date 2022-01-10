@@ -12,6 +12,14 @@ import math
 from torchmetrics import SpearmanCorrcoef
 import torchmetrics
 import torchvision
+from captum.attr import LayerGradCam, LayerAttribution
+from captum.attr import visualization as viz
+import matplotlib.pyplot as plt
+
+
+import sys
+sys.path.append('./')
+from mc_lightning.utilities.utilities import fig2img
 
 class _ECELoss(nn.Module):
     """
@@ -77,6 +85,7 @@ class PretrainedResnet50FT(pl.LightningModule):
         self.resnet = nn.Sequential(*image_modules)
         self.classifier = nn.Linear(2048, self.hparams.num_classes)
         self.dropout = nn.Dropout(p=self.hparams.dropout)
+        self.cam = LayerGradCam(lambda x: self.classifier(self.forward(x)).softmax(dim=1), self.resnet[5][3])
 
     def forward(self, x):
         out = self.resnet(x)
@@ -85,9 +94,13 @@ class PretrainedResnet50FT(pl.LightningModule):
         return out
 
     def step(self, who, batch, batch_nb):    
-        x, task_labels, slide_id = batch
+        if who != 'test':
+            x, task_labels, slide_id = batch
+        else:
+            x, task_labels, slide_id, ori = batch
         
         #Av labels
+        av_label = torch.mean(task_labels.float())
         self.log(who + '_av_label', torch.mean(task_labels.float()))
 
         #Define logits over the task and source embeddings
@@ -96,16 +109,16 @@ class PretrainedResnet50FT(pl.LightningModule):
         #Define loss values over the logits
         loss = task_loss = F.cross_entropy(task_logits, task_labels, reduction = "mean")                
                 
-        #Train acc
+        #Acc
         task_preds = task_logits.argmax(-1)
         task_acc = torchmetrics.functional.accuracy(task_preds, task_labels)
         
         #F1
         task_f1 = torchmetrics.functional.f1(task_preds, task_labels, num_classes = self.hparams.num_classes, average = 'weighted')
 
-        self.log(who + '_loss', loss)
-        self.log(who + '_acc', task_acc)
-        self.log(who + '_f1', task_f1)
+        self.log(who + '_loss', loss, on_epoch=True)
+        self.log(who + '_acc', task_acc, on_epoch=True)
+        self.log(who + '_f1', task_f1, on_epoch=True)
 
         # wandb.run.summary[who + "_best_task_f1"]  = max(wandb.run.summary[who + "_best_task_f1"], task_f1)
 
@@ -115,11 +128,11 @@ class PretrainedResnet50FT(pl.LightningModule):
         # REQUIRED
         loss = self.step('train', batch, batch_nb)
 
-        if batch_nb == 0:
-            imgs = batch[0]
-            grid_of_imgs = torchvision.utils.make_grid(imgs, nrow = 4)
-            tensorboard = self.logger.experiment
-            tensorboard.add_image("example_imgs", grid_of_imgs)
+        # if batch_nb == 0:
+        #     imgs = batch[0][:2]
+        #     grid_of_imgs = torchvision.utils.make_grid(imgs, nrow = 1)
+        #     tensorboard = self.logger.experiment
+        #     tensorboard.add_image("example_imgs", grid_of_imgs)
 
 
         return loss
@@ -128,9 +141,29 @@ class PretrainedResnet50FT(pl.LightningModule):
         loss = self.step('val', batch, batch_nb)
         return loss
 
-        
+    
     def test_step(self, batch, batch_nb):
         loss = self.step('test', batch, batch_nb)
+
+        if batch_nb == 0:
+            x, task_labels, slide_id, ori = batch
+            pred_prob = self.classifier(self.forward(x)).softmax(dim = 1)
+            pred_idx = torch.argmax(pred_prob, dim = 1)
+            attr = self.cam.attribute(x, target = 1)
+            upsampled_attr = LayerAttribution.interpolate(attr, (x.shape[2], x.shape[3]))
+            
+            for viz_idx in range(x.shape[0]):
+                print(viz_idx)
+                figo = viz.visualize_image_attr_multiple(upsampled_attr[viz_idx].cpu().permute(1,2,0).detach().numpy(),
+                    original_image=ori[viz_idx].cpu().permute(1,2,0).numpy(),signs=["all", "positive", "negative"],
+                    methods=["original_image", "masked_image","masked_image"], titles = ['Original', 'Attribution for tumor', 'Attribution for normal']
+                )[0]
+                figo.suptitle(f'slide: {slide_id[viz_idx].item()} \n \n pred: {pred_idx[viz_idx].item()}' + \
+                    f' (prob={round(pred_prob[viz_idx,1].item(), 2)}) \n actual: {task_labels[viz_idx].item()}')
+                figo.savefig(f'/mnt/disks/disk_use/blca/ml_results/models/TvN/explain/gradcam/gradcam_composite_testing_{viz_idx}.png')
+                plt.close()
+                plt.clf()
+
         return loss
 
     def configure_optimizers(self):
