@@ -15,11 +15,16 @@ import torchvision
 from captum.attr import LayerGradCam, LayerAttribution
 from captum.attr import visualization as viz
 import matplotlib.pyplot as plt
-
+from scipy.spatial.distance import cdist
+from sklearn.metrics import roc_auc_score
 
 import sys
 sys.path.append('./')
-from mc_lightning.utilities.utilities import fig2img
+try:
+    from mc_lightning.utilities.utilities import fig2tensor
+except:
+    from mc_lightning_public.mc_lightning.utilities.utilities import fig2tensor
+
 
 class _ECELoss(nn.Module):
     """
@@ -87,6 +92,19 @@ class PretrainedResnet50FT(pl.LightningModule):
         self.dropout = nn.Dropout(p=self.hparams.dropout)
         self.cam = LayerGradCam(lambda x: self.classifier(self.forward(x)).softmax(dim=1), self.resnet[5][3])
 
+        if 'embedding_nn' in self.hparams and self.hparams.embedding_nn:
+            self.embedding_collector = np.zeros((15000, 2048))
+            self.original_img_collector = np.zeros((15000, 3, self.hparams.crop_size, self.hparams.crop_size))
+            self.embedding_ptr = 0
+            self.label_saver = []
+            self.slide_saver = []
+        if self.hparams.show_misclassified:
+            self.misclassified_fig, self.misclassified_axs = plt.subplots(nrows = 5, ncols = 5)
+            self.misclassified_ptr = 0
+
+        self.test_pred_labels = {'pred_probs': [], 'labels': []}
+        self.val_pred_labels = {'pred_probs': [], 'labels': []}
+
     def forward(self, x):
         out = self.resnet(x)
         out = torch.flatten(out, 1)
@@ -94,15 +112,29 @@ class PretrainedResnet50FT(pl.LightningModule):
         return out
 
     def step(self, who, batch, batch_nb):    
-        if who != 'test':
-            x, task_labels, slide_id = batch
-        else:
-            x, task_labels, slide_id, ori = batch
+        
+        x, task_labels, slide_id, ori = batch
         
         #Av labels
         av_label = torch.mean(task_labels.float())
         self.log(who + '_av_label', torch.mean(task_labels.float()))
 
+        
+        # if training, add the image embeddings to the embedding collector
+        if who == 'train' and self.hparams.embedding_nn:
+            if self.embedding_ptr+128 < self.embedding_collector.shape[0]: # only write if we haven't hit our limit yet
+                self.eval() # so that dropout doesn't affect the calculated embedding
+                embedding = self(x) # tensor of shape batch x 2048
+                self.train()
+                batch_sz = embedding.shape[0]
+                self.embedding_collector[self.embedding_ptr : self.embedding_ptr + batch_sz, :] = embedding.cpu().detach().numpy()
+                
+                # this one has 3 x 224 x 224 slices
+                self.original_img_collector[self.embedding_ptr : self.embedding_ptr + batch_sz, :, :, :] = ori.cpu().detach().numpy()
+                self.label_saver = self.label_saver + task_labels.cpu().detach().tolist()
+                self.slide_saver = self.slide_saver + slide_id.cpu().detach().tolist()
+                self.embedding_ptr += batch_sz
+        
         #Define logits over the task and source embeddings
         task_logits = self.classifier(self(x))
 
@@ -139,32 +171,122 @@ class PretrainedResnet50FT(pl.LightningModule):
 
     def validation_step(self, batch, batch_nb):
         loss = self.step('val', batch, batch_nb)
+
+        if batch_nb==0:
+            # reset data to be used for confusion matrix
+            self.val_pred_labels = {'pred_probs': [], 'labels': []}
+        
+        # collect data for confusion matrix
+        x, task_labels = batch[0], batch[1]
+        pred_prob = self.classifier(self.forward(x)).softmax(dim = 1)
+
+        self.val_pred_labels['pred_probs'].extend(pred_prob[:,1].cpu().detach().tolist())
+        self.val_pred_labels['labels'].extend(task_labels.cpu().detach().tolist())
+
         return loss
 
     
     def test_step(self, batch, batch_nb):
         loss = self.step('test', batch, batch_nb)
 
-        if batch_nb == 0:
-            x, task_labels, slide_id, ori = batch
-            pred_prob = self.classifier(self.forward(x)).softmax(dim = 1)
-            pred_idx = torch.argmax(pred_prob, dim = 1)
-            attr = self.cam.attribute(x, target = 1)
-            upsampled_attr = LayerAttribution.interpolate(attr, (x.shape[2], x.shape[3]))
-            
-            for viz_idx in range(x.shape[0]):
-                print(viz_idx)
-                figo = viz.visualize_image_attr_multiple(upsampled_attr[viz_idx].cpu().permute(1,2,0).detach().numpy(),
-                    original_image=ori[viz_idx].cpu().permute(1,2,0).numpy(),signs=["all", "positive", "negative"],
-                    methods=["original_image", "masked_image","masked_image"], titles = ['Original', 'Attribution for tumor', 'Attribution for normal']
-                )[0]
-                figo.suptitle(f'slide: {slide_id[viz_idx].item()} \n \n pred: {pred_idx[viz_idx].item()}' + \
-                    f' (prob={round(pred_prob[viz_idx,1].item(), 2)}) \n actual: {task_labels[viz_idx].item()}')
-                figo.savefig(f'/mnt/disks/disk_use/blca/ml_results/models/TvN/explain/gradcam/gradcam_composite_testing_{viz_idx}.png')
-                plt.close()
-                plt.clf()
+        
+        x, task_labels, slide_id, ori = batch
+        pred_prob = self.classifier(self.forward(x)).softmax(dim = 1)
+        pred_idx = torch.argmax(pred_prob, dim = 1)
 
-        return loss
+        self.test_pred_labels['pred_probs'].extend(pred_prob[:,1].cpu().detach().tolist())
+        self.test_pred_labels['labels'].extend(task_labels.cpu().detach().tolist())
+
+        
+
+        
+        if self.hparams.show_misclassified:
+            for i in range(x.shape[0]):
+                if pred_idx[i].item() != task_labels[i].item() and self.misclassified_ptr < 25:
+                    # incorrectly predicted tile; let's write this to the logger
+                    self.misclassified_axs[self.misclassified_ptr//5][self.misclassified_ptr%5].imshow(ori[i].cpu().detach().permute(1, 2, 0).numpy())
+                    self.misclassified_axs[self.misclassified_ptr//5][self.misclassified_ptr%5].set_title(f'prob = {round(pred_prob[i,1].item(), 2)} \n Actual: {task_labels[i].item()}', fontsize = 6)
+                    self.misclassified_axs[self.misclassified_ptr//5][self.misclassified_ptr%5].axis('off')
+                    self.misclassified_ptr += 1
+            # self.misclassified_fig.savefig('debug.png')
+        
+
+
+        if batch_nb == 0:
+            if self.hparams.run_gradcam_testing:
+                print('Generating gradcam images on test set.')
+                attr = self.cam.attribute(x, target = 1)
+                upsampled_attr = LayerAttribution.interpolate(attr, (x.shape[2], x.shape[3]))
+                
+                for viz_idx in range(x.shape[0]):
+                    figo = viz.visualize_image_attr_multiple(upsampled_attr[viz_idx].cpu().permute(1,2,0).detach().numpy(),
+                        original_image=ori[viz_idx].cpu().permute(1,2,0).numpy(),signs=["all", "positive", "negative"],
+                        methods=["original_image", "blended_heat_map","blended_heat_map"], titles = ['Original', 'Attribution for tumor', 'Attribution for normal']
+                    )[0]
+                    figo.suptitle(f'slide: {slide_id[viz_idx].item()} \n \n pred: {pred_idx[viz_idx].item()}' + \
+                        f' (prob={round(pred_prob[viz_idx,1].item(), 2)}) \n actual: {task_labels[viz_idx].item()}' + \
+                            f'\n max_positive: {upsampled_attr[viz_idx].max().item()} \n max_negative: {upsampled_attr[viz_idx].min().item()}')
+                    figo.savefig(f'/mnt/disks/disk_use/blca/ml_results/models/TvN/explain/gradcam/gradcam_composite_testing_{viz_idx}.png')
+                    plt.close()
+                    plt.clf()
+            
+            if self.hparams.embedding_nn:
+                # compute nearest neighbor distances
+                test_embeddings = self(x).cpu().detach().numpy() # batch_size x 2048 np array
+                component_weights = self.classifier.weight[1,:].cpu().detach().numpy()
+                test_embeddings = test_embeddings * np.sqrt(np.abs(component_weights.reshape(1, -1)))
+                train_embeddings = self.embedding_collector[:self.embedding_ptr,:] * np.sqrt(np.abs(component_weights.reshape(1, -1))) # sqrt so that coefficients are to the power of 1 after squared euclidean distance.
+                # ^ notably, component weights can forget about the sign because math: (-x1 - -x2)^2 = (-1)^2 (x1 - x2)^2 = (x1 - x2)^2
+
+
+                similarity_mat = cdist(train_embeddings, test_embeddings, metric = 'sqeuclidean') # self.embedding_ptr x batch_size np array
+                shortest_dists = np.argmin(similarity_mat, axis = 0)
+
+                corresponding_imgs = torch.from_numpy(self.original_img_collector[shortest_dists,:])
+                
+                combined_tensor = torch.stack((ori.cpu().detach(),
+                    corresponding_imgs), dim=1).view(x.shape[0] * 2, 3, self.hparams.crop_size, self.hparams.crop_size)
+
+                grid_of_imgs = torchvision.utils.make_grid(combined_tensor, nrow = 2)
+
+                self.logger.experiment.add_image("nearest-neighbor tiles for test tiles", grid_of_imgs)
+
+                print([self.slide_saver[i] for i in shortest_dists.tolist()])
+                print(slide_id.cpu().detach().numpy())
+                
+
+        return {'loss': loss, 'pred_probs': pred_prob, 'label': task_labels}
+
+    def on_validation_epoch_end(self):
+        if self.trainer.sanity_checking:
+            return
+        
+        preds = [round(x) for x in self.val_pred_labels['pred_probs']]
+        y_true = self.val_pred_labels['labels']
+        class_names = ['Normal', 'Tumor']
+        wandb.log({"confusion_matrix_val" : wandb.plot.confusion_matrix(preds = preds, y_true=y_true, class_names=class_names)})
+        
+        task_auc = roc_auc_score(np.asarray(y_true), np.asarray(preds))
+        wandb.log({'val_auc': task_auc})
+
+
+
+    def on_test_end(self):
+        if self.hparams.show_misclassified:
+            self.misclassified_fig.tight_layout()
+            self.logger.experiment.add_image("misclassified test tiles", fig2tensor(self.misclassified_fig)) 
+        
+        
+        # wandb.log({"confusion_matrix_test" : wandb.plot.confusion_matrix(preds=torch.Tensor(self.test_pred_labels['pred_probs']),
+        #                 y_true=torch.tensor(self.test_pred_labels['labels'], dtype = torch.int), class_names=['Normal', 'Tumor'])})
+        
+        preds = [round(x) for x in self.test_pred_labels['pred_probs']]
+        y_true = self.test_pred_labels['labels']
+        class_names = ['Normal', 'Tumor']
+        wandb.log({"confusion_matrix_test" : wandb.plot.confusion_matrix(preds = preds, y_true=y_true, class_names=class_names)})
+
+        task_auc = roc_auc_score(np.asarray(y_true), np.asarray(preds))
+        wandb.log({'test_auc': task_auc})
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.weight_decay)

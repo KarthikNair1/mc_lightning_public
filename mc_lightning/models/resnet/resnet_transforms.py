@@ -80,7 +80,7 @@ class RGBTrainTransform(object):
         data_transforms = transforms.Compose([transforms.Resize(self.full_size),
                                               transforms.RandomCrop(self.crop_size),
                                               transforms.RandomHorizontalFlip(),
-                                            #   color_jitter,
+                                              color_jitter,
                                               transforms.ToTensor(),
                                               Expander(),
                                               normalizer])

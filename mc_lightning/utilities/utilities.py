@@ -1,12 +1,15 @@
+import collections
+import itertools
 import numpy as np
 import os
 import torch
 import matplotlib.pyplot as plt
-from sklearn.model_selection import KFold
+from sklearn.model_selection import GroupShuffleSplit, KFold
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import f1_score, roc_auc_score, average_precision_score
 import pandas as pd
-
+from torchvision.transforms import ToTensor
+import io
 
 from PIL import Image
 
@@ -199,7 +202,9 @@ def make_folds(paths_df_file, out_dir, label_name,
 
     print(f'IDs remaining after balancing: {len(all_ids_subset)}')
     sample_ids = paths_subset_df.index.unique().values
+
     train_dev_ids, test_ids = train_test_split(sample_ids, test_size=test_size, shuffle=True, random_state = seed)
+
     train_dev_df = paths_subset_df.loc[train_dev_ids]
     train_dev_splits = [
         create_cv_splits_id_only(train_dev_df.loc[train_dev_df[label_name] == label], num_folds=folds, seed=seed, \
@@ -228,6 +233,85 @@ def make_folds(paths_df_file, out_dir, label_name,
         id_agg['val_ids'][split_idx] = val_ids
 
     return id_agg
+
+
+
+# surya's code to balance labels
+def balance_labels(df, label_col, random_state=1, replace = False):
+
+    #Check the distributions
+    ctr = collections.Counter(df[label_col].values)
+    print('before balancing, label distribution', ctr)
+
+    #Select the same number of samples from each class
+    if replace == False:
+        num_p_class = min(ctr.values())
+    else:
+        num_p_class = max(ctr.values())
+
+    print('min_class_num', num_p_class)
+
+    df = pd.concat([
+        df[df[label_col] == i].sample(n=num_p_class, replace = replace, random_state=random_state) for i in ctr.keys()           
+    ])
+
+    #Shuffle the validation set
+    df = df.sample(frac=1.0, random_state=random_state)
+    #df.reset_index(drop = True, inplace = True)
+
+    #Check the distributions
+    ctr = collections.Counter(df[label_col].values)
+    print('after balancing, label distribution', ctr)
+
+    return df
+
+# surya's code to split, balancing by label and separating train and val by a group variable
+def split_train_val_by_labels_and_groups(slide_df, GROUP_COL, train_size, random_state, 
+                                        label = 'is_tumor', num_classes = 2, replace = False,
+                                        balance_val = True):
+    
+    gss = GroupShuffleSplit(n_splits=100, train_size=train_size, random_state=random_state)
+    splits = list(gss.split(X = list(range(len(slide_df))), groups = slide_df[GROUP_COL]))
+
+    td_ctr = collections.Counter([])
+    vd_ctr = collections.Counter([])
+
+    splits_iterator = iter(splits)
+
+    ct = 0
+    while any([(x not in y) for (x, y) in itertools.product(list(range(num_classes)), [td_ctr, vd_ctr])]):
+        ct += 1
+        if ct > 11:
+            return None, None
+        
+        train_idx, val_idx = next(splits_iterator)
+
+        print(train_idx, val_idx)
+
+        #Create train and val paths
+        train_paths, val_paths = slide_df.iloc[train_idx] , slide_df.iloc[val_idx] # this works b/c slide_id = index in BLCA data
+
+        if balance_val:
+            val_paths, train_paths = balance_labels(val_paths, label, replace = replace), balance_labels(train_paths, label, replace = replace)    
+        else:
+            val_paths, train_paths = val_paths, balance_labels(train_paths, label, replace = replace)    
+
+        #Adjusting for the path lenghts
+        if len(val_paths) > len(train_paths) and balance_val:
+            train_paths, val_paths = val_paths, train_paths
+
+        print('#Final Distributions')
+        print('val_paths', val_paths.groupby([GROUP_COL, label]).nunique())
+        print('train_paths', train_paths.groupby([GROUP_COL, label]).nunique())
+        
+        td_ctr = collections.Counter(train_paths[label].values)
+        vd_ctr = collections.Counter(val_paths[label].values)
+        print('train distribution', td_ctr,  'val distribution', vd_ctr)
+    
+    #wandb.log({'num_train_samples' : len(train_paths)})
+    #wandb.log({'num_val_samples' : len(val_paths)})
+    
+    return train_paths.index.values.tolist(), val_paths.index.values.tolist()
 
 def get_checkpoint_and_data(output_dir, paths_file, fold_idx, model_idx, epoch=9):
     paths_df = pd.read_pickle(paths_file)
@@ -503,3 +587,14 @@ def fig2img(fig):
     buf.seek(0)
     img = Image.open(buf)
     return img
+
+def fig2tensor(fig):
+    fig
+    buf = io.BytesIO()
+    plt.savefig(buf, format='jpeg')
+    buf.seek(0)
+
+    image = Image.open(buf)
+    return ToTensor()(image)
+
+

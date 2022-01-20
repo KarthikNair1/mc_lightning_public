@@ -8,7 +8,10 @@ from PIL import Image
 
 import sys
 sys.path.append('./')
-from mc_lightning.utilities.utilities import pil_loader
+try:
+    from mc_lightning.utilities.utilities import pil_loader
+except:
+    from mc_lightning_public.mc_lightning.utilities.utilities import pil_loader
 
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -51,7 +54,7 @@ class SlideDataset(data.Dataset):
         pil_file = self.transform(pil_file)
         slide_id = self.slide_ids[index]
         label = self.labels[index]
-
+        
         if self.transform_ori is not None: # we need to also return original image after transforming with transform_ori
             ori = self.transform_ori(ori)
             return pil_file, label, slide_id, ori

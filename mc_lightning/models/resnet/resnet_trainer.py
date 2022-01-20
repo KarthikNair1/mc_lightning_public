@@ -49,6 +49,11 @@ def cli_main():
     parser.add_argument('--crop_size', type=int, help='Uncropped input tile size', default=224)
     parser.add_argument('--aug_strength', '-s', type=float, default=1.0)
     parser.add_argument('--run_test_set', '-test', action='store_true')
+    parser.add_argument('--embedding_nn', action='store_true')
+    parser.add_argument('--run_gradcam_testing', action = 'store_true')
+    parser.add_argument('--show_misclassified', action = 'store_true')
+    parser.add_argument('--save_every_checkpoint', action = 'store_true')
+    
 
 
     # add additional args to look for without clogging above
@@ -66,7 +71,7 @@ def cli_main():
     # initialize wandb to sync with tensorboard
     os.environ['WANDB_DIR'] = args.out_dir
     wandb.init(sync_tensorboard=True)
-
+    
     try:
         paths_df = pd.read_pickle(args.paths_df)
     except:
@@ -91,19 +96,25 @@ def cli_main():
         train_paths = subsample_tiles(paths_df, train_ids, args.tiles_per_slide, args.label_var)
         val_paths = subsample_tiles(paths_df, val_ids, args.tiles_per_slide, args.label_var)
         # test_paths = subsample_tiles(paths_df, test_ids, args.tiles_per_slide, args.label_var)
+    
+    
 
     train_dataset = SlideDataset(
         paths=train_paths.full_path.values,
         slide_ids=train_paths.index.values,
         labels=train_paths[args.label_var].values,
-        transform_compose=RGBTrainTransform(args.tile_size, args.crop_size, args.aug_strength)
+        transform_compose=RGBTrainTransform(args.tile_size, args.crop_size, args.aug_strength),
+        transform_compose_ori=RGBEvalTransform(args.tile_size, args.crop_size, add_norm=False)
     )
     val_dataset = SlideDataset(
         paths=val_paths.full_path.values,
         slide_ids=val_paths.index.values,
         labels=val_paths[args.label_var].values,
-        transform_compose=RGBEvalTransform(args.tile_size, args.crop_size)
+        transform_compose=RGBEvalTransform(args.tile_size, args.crop_size),
+        transform_compose_ori=RGBEvalTransform(args.tile_size, args.crop_size, add_norm=False)
     )
+
+    wandb.log({'train_tile_count': len(train_dataset), 'val_tile_count': len(val_dataset)})
 
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                                   pin_memory=True, num_workers=args.num_workers)
@@ -116,7 +127,10 @@ def cli_main():
     # create trainer
     #trainer = pl.Trainer.from_argparse_args(args, logger=tb_logger, checkpoint_callback=checkpoint_callback)
     early_stop_callback = EarlyStopping(monitor = 'val_loss', min_delta = 0.0, patience = 3, verbose = False, mode = 'min')
-    trainer = pl.Trainer.from_argparse_args(args, default_root_dir = args.out_dir, callbacks = [])
+    callback_list = []
+    if args.save_every_checkpoint:
+        callback_list.append(pl.callbacks.ModelCheckpoint(monitor = 'val_loss', save_top_k = -1, every_n_epochs = 1))
+    trainer = pl.Trainer.from_argparse_args(args, default_root_dir = args.out_dir, callbacks = callback_list)
 
     # fit model
     trainer.fit(model, train_dataloader=train_dataloader, val_dataloaders=val_dataloader)
@@ -132,9 +146,30 @@ def cli_main():
             transform_compose=RGBEvalTransform(args.tile_size, args.crop_size),
             transform_compose_ori=RGBEvalTransform(args.tile_size, args.crop_size, add_norm=False)
         )
+        wandb.log({'test_tile_count': len(test_dataset)})
+
         test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, pin_memory=True,
                                      num_workers=args.num_workers, shuffle = True)
         trainer.test(model, test_dataloaders=test_dataloader)
+
+
+    # log overlaps in source sites
+    train_source_sites = list(set([x.split('-')[1] for x in train_paths['case_submitter_id']]))
+    val_source_sites = list(set([x.split('-')[1] for x in val_paths['case_submitter_id']]))
+
+    if args.run_test_set:
+        test_source_sites = list(set([x.split('-')[1] for x in test_paths['case_submitter_id']]))
+    else:
+        test_source_sites = []
+    combiner = [train_source_sites, val_source_sites, test_source_sites]
+    result = []
+    for i in range(3):
+        result.append([])
+        for j in range(3):
+            overlap = len(list(set(combiner[i]) & set(combiner[j])))
+            result[i].append(overlap)
+    wandb.log({"source_site_overlap_table": wandb.Table(data=result, columns=["Train", "Val", "Test"], rows = ["Train", "Val", "Test"])})
+
 
 
 if __name__ == '__main__':
