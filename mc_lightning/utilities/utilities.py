@@ -563,16 +563,16 @@ def aggregate_results_multitask(df):
     return metrics
 
 
-def tile_sampler(x, tiles_per_slide):
-    samples = x.sample(min(len(x), tiles_per_slide))
+def tile_sampler(x, tiles_per_slide, seed = None):
+    samples = x.sample(min(len(x), tiles_per_slide), random_state = seed)
     return samples
 
 
-def subsample_tiles(data_df, ids, tiles_per_slide, label_var, slide_var='slide_id'):
+def subsample_tiles(data_df, ids, tiles_per_slide, label_var, seed = None, slide_var='slide_id'):
     # get subset dataframe
     subset_df = data_df.loc[ids]
     # perform subsampling
-    subset_df = subset_df.reset_index().groupby(slide_var).apply(lambda x: tile_sampler(x, tiles_per_slide))
+    subset_df = subset_df.reset_index().groupby(slide_var).apply(lambda x: tile_sampler(x, tiles_per_slide, seed))
     subset_df = subset_df.reset_index(drop=True).dropna(subset=[label_var])
 
     subset_df = subset_df.set_index(slide_var, drop = False)
