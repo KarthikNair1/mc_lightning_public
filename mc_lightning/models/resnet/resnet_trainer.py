@@ -10,7 +10,7 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from torch.utils.data import random_split, DataLoader
 
 sys.path.append('./')
-from mc_lightning.utilities.utilities import tile_sampler, subsample_tiles
+from mc_lightning.utilities.utilities import tile_sampler, subsample_tiles, convert_pd_label_col_to_int
 from mc_lightning.models.resnet.resnet_module import PretrainedResnet50FT
 from mc_lightning.models.resnet.resnet_transforms import RGBTrainTransform, RGBEvalTransform
 from mc_lightning.models.resnet.resnet_dataset import SlideDataset
@@ -53,6 +53,8 @@ def cli_main():
     parser.add_argument('--run_gradcam_testing', action = 'store_true')
     parser.add_argument('--show_misclassified', action = 'store_true')
     parser.add_argument('--save_every_checkpoint', action = 'store_true')
+    parser.add_argument('--addon_outdir', type=str, default = '',
+        help = 'Name of subdirectory inside of out_dir to write explainability images, etc.')
     
 
 
@@ -77,6 +79,12 @@ def cli_main():
     except:
         paths_df = pd.read_csv(args.paths_df)
 
+    # check whether label column is an int, if not we convert it to one
+    try:
+        paths_df[args.label_var] = paths_df[args.label_var].astype('int')
+    except:
+        print("Label column ")
+
     fold_idx = args.fold_index
     print(f'====== Only Running on Fold {fold_idx} ======')
     # PULLING FROM model-comparison train_folds.py
@@ -97,7 +105,8 @@ def cli_main():
         val_paths = subsample_tiles(paths_df, val_ids, args.tiles_per_slide, args.label_var)
         # test_paths = subsample_tiles(paths_df, test_ids, args.tiles_per_slide, args.label_var)
     
-    
+    train_paths = convert_pd_label_col_to_int(train_paths, args.label_var)
+    val_paths = convert_pd_label_col_to_int(val_paths, args.label_var)
 
     train_dataset = SlideDataset(
         paths=train_paths.full_path.values,
@@ -113,7 +122,7 @@ def cli_main():
         transform_compose=RGBEvalTransform(args.tile_size, args.crop_size),
         transform_compose_ori=RGBEvalTransform(args.tile_size, args.crop_size, add_norm=False)
     )
-
+    
     wandb.log({'train_tile_count': len(train_dataset), 'val_tile_count': len(val_dataset)})
 
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
@@ -129,7 +138,7 @@ def cli_main():
     early_stop_callback = EarlyStopping(monitor = 'val_loss', min_delta = 0.0, patience = 3, verbose = False, mode = 'min')
     callback_list = []
     if args.save_every_checkpoint:
-        callback_list.append(pl.callbacks.ModelCheckpoint(monitor = 'val_loss', save_top_k = -1, every_n_epochs = 1))
+        callback_list.append(pl.callbacks.ModelCheckpoint(monitor = 'val_loss', save_top_k = -1, every_n_epochs = 1, save_weights_only = True))
     trainer = pl.Trainer.from_argparse_args(args, default_root_dir = args.out_dir, callbacks = callback_list)
 
     # fit model
@@ -139,6 +148,7 @@ def cli_main():
     # If flagged, create test subset and evaluate
     if args.run_test_set:
         test_paths = subsample_tiles(paths_df, test_ids, args.tiles_per_slide, args.label_var)
+        test_paths = convert_pd_label_col_to_int(test_paths, args.label_var)
         test_dataset = SlideDataset(
             paths=test_paths.full_path.values,
             slide_ids=test_paths.index.values,

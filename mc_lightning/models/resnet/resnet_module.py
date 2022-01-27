@@ -134,7 +134,7 @@ class PretrainedResnet50FT(pl.LightningModule):
                 self.label_saver = self.label_saver + task_labels.cpu().detach().tolist()
                 self.slide_saver = self.slide_saver + slide_id.cpu().detach().tolist()
                 self.embedding_ptr += batch_sz
-        
+
         #Define logits over the task and source embeddings
         task_logits = self.classifier(self(x))
 
@@ -226,7 +226,7 @@ class PretrainedResnet50FT(pl.LightningModule):
                     figo.suptitle(f'slide: {slide_id[viz_idx].item()} \n \n pred: {pred_idx[viz_idx].item()}' + \
                         f' (prob={round(pred_prob[viz_idx,1].item(), 2)}) \n actual: {task_labels[viz_idx].item()}' + \
                             f'\n max_positive: {upsampled_attr[viz_idx].max().item()} \n max_negative: {upsampled_attr[viz_idx].min().item()}')
-                    figo.savefig(f'/mnt/disks/disk_use/blca/ml_results/models/TvN/explain/gradcam/gradcam_composite_testing_{viz_idx}.png')
+                    figo.savefig(f'/mnt/disks/disk_use/blca/ml_results/models/{self.hparams.addon_outdir}/explain/gradcam/gradcam_composite_testing_{viz_idx}.png')
                     plt.close()
                     plt.clf()
             
@@ -263,7 +263,7 @@ class PretrainedResnet50FT(pl.LightningModule):
         
         preds = [round(x) for x in self.val_pred_labels['pred_probs']]
         y_true = self.val_pred_labels['labels']
-        class_names = ['Normal', 'Tumor']
+        class_names = ['0', '1']
         wandb.log({"confusion_matrix_val" : wandb.plot.confusion_matrix(preds = preds, y_true=y_true, class_names=class_names)})
         
         task_auc = roc_auc_score(np.asarray(y_true), np.asarray(preds))
@@ -282,7 +282,7 @@ class PretrainedResnet50FT(pl.LightningModule):
         
         preds = [round(x) for x in self.test_pred_labels['pred_probs']]
         y_true = self.test_pred_labels['labels']
-        class_names = ['Normal', 'Tumor']
+        class_names = ['0', '1']
         wandb.log({"confusion_matrix_test" : wandb.plot.confusion_matrix(preds = preds, y_true=y_true, class_names=class_names)})
 
         task_auc = roc_auc_score(np.asarray(y_true), np.asarray(preds))
