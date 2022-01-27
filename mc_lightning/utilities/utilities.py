@@ -176,12 +176,12 @@ def make_multitask_folds(paths_df_file, out_dir, task0_labels, task1_labels,
 ## from prepare_data_folds_multitask -- has updated and more flexible way of setting up
 def make_folds(paths_df_file, out_dir, label_name,
                test_size=0.15, folds=4, seed=0, num_classes=2, prefix='20x_512px_'):
-
+    
     if seed is not None:
         print('Using seed for make_folds call')
         np.random.seed(seed) # does this affect sklearn
 
-    
+
     # manual hardcoding
     try:
         paths_df = pd.read_pickle(paths_df_file)
@@ -596,5 +596,13 @@ def fig2tensor(fig):
 
     image = Image.open(buf)
     return ToTensor()(image)
+
+def convert_pd_label_col_to_int(df, label_col):
+    try:
+        df[label_col] = df[label_col].astype('int')
+        return df
+    except:
+        print('Some values in labels are still missing.')
+        return None
 
 
